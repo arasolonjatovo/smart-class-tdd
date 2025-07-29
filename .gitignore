@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.env
+.env/
+venv/
+mon_env/
+env/
+*.egg-info/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# VS Code
+.vscode/
+
+# Fichiers logs
+*.log
+
+# Fichiers temporaires système
+.DS_Store
+Thumbs.db
+
+# Fichiers de données lourds (optionnel selon ton projet)
+data/
