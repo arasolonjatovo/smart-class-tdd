@@ -3,3 +3,9 @@ matplotlib
 seaborn
 numpy<2.2.0
 scikit-learn
+flask
+flask-cors
+sqlalchemy
+psycopg2-binary
+python-dotenv
+ortools
