@@ -2,9 +2,9 @@ from ortools.sat.python import cp_model
 from datetime import datetime, timedelta
 import logging
 import os
-import joblib
-import pandas as pd
-from src.predict_temperature import predict_remaining_day_structured
+import json
+from nbclient import NotebookClient
+import nbformat
 from src.services.sensor_data_service import SensorDataService
 
 logger = logging.getLogger(__name__)
@@ -172,18 +172,58 @@ class RoomOptimizer:
 
         return objective_terms
 
+    def _update_room_predictions(self):
+        """Execute the notebook to generate fresh room predictions"""
+        try:
+            notebook_path = os.path.join(
+                os.path.dirname(__file__),
+                "../../notebooks/06_Agregation_RoomData.ipynb",
+            )
+
+            if not os.path.exists(notebook_path):
+                logger.warning(f"Notebook not found at {notebook_path}")
+                return False
+
+            logger.info("Updating room predictions by running notebook...")
+
+            with open(notebook_path, "r") as f:
+                nb = nbformat.read(f, as_version=4)
+
+            client = NotebookClient(
+                nb,
+                timeout=300,
+                resources={"metadata": {"path": os.path.dirname(notebook_path)}},
+            )
+
+            client.execute()
+
+            logger.info("Room predictions updated successfully")
+            return True
+
+        except Exception as e:
+            logger.warning(f"Notebook execution failed: {e}")
+            return False
+
     def _calculate_all_temperature_predictions(self):
         """Pre-calculate temperature predictions for all room-lesson combinations"""
-        model = None
+
+        self._update_room_predictions()
+
+        room_predictions = {}
         try:
-            model_path = os.path.join(
-                os.path.dirname(__file__), "../../model/random_forest.pkl"
+            roomdata_path = os.path.join(
+                os.path.dirname(__file__), "../../reports/roomdata.json"
             )
-            model = joblib.load(model_path)
-            logger.info("Temperature prediction model loaded successfully")
+            with open(roomdata_path, "r") as f:
+                roomdata = json.load(f)
+                room_info = roomdata.get("room", {})
+                room_predictions[room_info.get("id", "C013")] = room_info.get(
+                    "days", {}
+                )
+            logger.info("Room prediction data loaded successfully from roomdata.json")
         except Exception as e:
-            logger.warning(f"Could not load temperature model: {e}")
-            return
+            logger.warning(f"Could not load room prediction data: {e}")
+            room_predictions = {}
 
         for i, lesson in enumerate(self.lessons):
             lesson_datetime = datetime.fromisoformat(
@@ -195,45 +235,21 @@ class RoomOptimizer:
                     self.temperature_predictions[(i, j)] = 21.0
                 continue
 
-            day_name = lesson_datetime.strftime("%A").lower()
+            days_from_now = (lesson_datetime.date() - datetime.now().date()).days
+            day_key = f"day{days_from_now + 1}" if 0 <= days_from_now < 7 else None
 
             for j, room in enumerate(self.rooms):
                 try:
-                    student_count = lesson.get("student_count", 0)
-                    room_capacity = room.get("capacity", 1)
-                    capacity_percentage = (
-                        (student_count / room_capacity) * 100
-                        if room_capacity > 0
-                        else 0
+                    room_name = room.get("name")
+
+                    room_day_predictions = room_predictions.get(room_name, {}).get(
+                        day_key, {}
                     )
 
-                    sensor_data = SensorDataService.get_latest_room_data(
-                        room["id"], lesson_datetime
-                    )
-
-                    if sensor_data.get("temperature_saved_at"):
-                        last_data_hour = sensor_data["temperature_saved_at"].strftime(
-                            "%H:00"
-                        )
-                    else:
-                        last_data_hour = "09:00"
-
-                    initial_data = pd.DataFrame(
-                        {
-                            "room": [room["name"]],
-                            "day": [day_name],
-                            "hour": [last_data_hour],
-                            "temperature": [sensor_data["temperature"]],
-                            "humidity": [sensor_data["humidity"]],
-                            "airPressure": [sensor_data["airPressure"]],
-                            "capacity_percentage": [capacity_percentage],
-                            "temperature_outdoor": [sensor_data["temperature_outdoor"]],
-                        }
-                    )
-
-                    predictions = predict_remaining_day_structured(
-                        room["name"], day_name, last_data_hour, model, initial_data
-                    )
+                    if not room_day_predictions:
+                        # No predictions available for this room/day
+                        self.temperature_predictions[(i, j)] = 21.0
+                        continue
 
                     lesson_end_datetime = datetime.fromisoformat(
                         lesson["end_time"].replace("Z", "+00:00")
@@ -249,14 +265,9 @@ class RoomOptimizer:
 
                     while current_hour <= end_hour:
                         hour_str = current_hour.strftime("%H:00")
-                        if (
-                            hour_str
-                            in predictions["room"]["days"][day_name]["temperature"]
-                        ):
+                        if hour_str in room_day_predictions.get("temperature", {}):
                             temperatures.append(
-                                predictions["room"]["days"][day_name]["temperature"][
-                                    hour_str
-                                ]
+                                room_day_predictions["temperature"][hour_str]
                             )
                         current_hour = current_hour + timedelta(hours=1)
 
