@@ -10,3 +10,7 @@ psycopg2-binary
 python-dotenv
 ortools
 xgboost
+nbclient
+nbformat
+jupyter-client
+ipykernel
